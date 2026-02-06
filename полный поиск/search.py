@@ -1,15 +1,15 @@
 import sys
-import requests
 from io import BytesIO
+import requests
 from PIL import Image
-from map_scale import get_map_params
+import map_scale
+import config
 
 toponym_to_find = " ".join(sys.argv[1:])
 
 geocoder_api_server = "http://geocode-maps.yandex.ru/1.x/"
-
 geocoder_params = {
-    "apikey": "8013b162-6b42-4997-9691-77b7074026e0",
+    "apikey": config.GEOCODER_API_KEY,
     "geocode": toponym_to_find,
     "format": "json"
 }
@@ -21,14 +21,18 @@ if not response:
 
 json_response = response.json()
 toponym = json_response["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]
-toponym_coodrinates = toponym["Point"]["pos"]
-toponym_longitude, toponym_lattitude = toponym_coodrinates.split(" ")
+toponym_coordinates = toponym["Point"]["pos"]
+toponym_longitude, toponym_lattitude = toponym_coordinates.split(" ")
 
-apikey = "f3a0fe3a-b07e-4840-a1da-06f18b2ddf13"
+spn_longitude, spn_latitude = map_scale.calculate_scale_params(toponym)
 
-map_params = get_map_params(toponym)
-map_params["apikey"] = apikey
-map_params["pt"] = f"{toponym_longitude},{toponym_lattitude},pm2rdm"
+map_params = {
+    "ll": f"{toponym_longitude},{toponym_lattitude}",
+    "spn": f"{spn_longitude},{spn_latitude}",
+    "pt": f"{toponym_longitude},{toponym_lattitude},pm2rdm",
+    "apikey": config.STATIC_MAPS_API_KEY,
+    "size": "650,450"
+}
 
 map_api_server = "https://static-maps.yandex.ru/v1"
 response = requests.get(map_api_server, params=map_params)
