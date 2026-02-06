@@ -1,118 +1,137 @@
 import sys
-import requests
 from io import BytesIO
+import requests
 from PIL import Image
-from math import radians, cos, sin, asin, sqrt
-from map_scale import get_map_params_for_two_points
+import math
+import scale_calculator
+import config
 
 def geocode(address):
     geocoder_api_server = "http://geocode-maps.yandex.ru/1.x/"
     geocoder_params = {
-        "apikey": "f3a0fe3a-b07e-4840-a1da-06f18b2ddf13",
+        "apikey": config.GEOCODER_API_KEY,
         "geocode": address,
         "format": "json"
     }
+    
     response = requests.get(geocoder_api_server, params=geocoder_params)
+    if not response:
+        return None
+    
     json_response = response.json()
-    toponym = json_response["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]
-    coords = toponym["Point"]["pos"]
-    longitude, latitude = map(float, coords.split())
-    address_name = toponym["metaDataProperty"]["GeocoderMetaData"]["text"]
-    return longitude, latitude, address_name
+    try:
+        toponym = json_response["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]
+        toponym_coordinates = toponym["Point"]["pos"]
+        longitude, latitude = map(float, toponym_coordinates.split())
+        address_name = toponym["name"]
+        return (longitude, latitude), address_name
+    except:
+        return None
 
 def search_pharmacy(lon, lat):
     search_api_server = "https://search-maps.yandex.ru/v1/"
-    api_key = "f3a0fe3a-b07e-4840-a1da-06f18b2ddf13"
     search_params = {
-        "apikey": api_key,
+        "apikey": "dda3ddba-c9ea-4ead-9010-f43fbc15c6e3",
         "text": "аптека",
         "lang": "ru_RU",
         "ll": f"{lon},{lat}",
         "type": "biz",
-        "results": 1
+        "results": "1"
     }
-    response = requests.get(search_api_server, params=search_params)
-    json_response = response.json()
     
-    if not json_response["features"]:
+    response = requests.get(search_api_server, params=search_params)
+    if not response:
         return None
     
-    org = json_response["features"][0]
-    org_coords = org["geometry"]["coordinates"]
-    org_lon, org_lat = org_coords[0], org_coords[1]
-    org_name = org["properties"]["CompanyMetaData"].get("name", "Название отсутствует")
-    org_address = org["properties"]["CompanyMetaData"].get("address", "Адрес отсутствует")
-    org_hours = org["properties"]["CompanyMetaData"].get("Hours", {})
-    hours_text = org_hours.get("text", "Время работы не указано") if org_hours else "Время работы не указано"
-    
-    return {
-        "coords": (org_lon, org_lat),
-        "name": org_name,
-        "address": org_address,
-        "hours": hours_text
-    }
+    json_response = response.json()
+    try:
+        organization = json_response["features"][0]
+        org_lon, org_lat = organization["geometry"]["coordinates"]
+        properties = organization["properties"]
+        name = properties.get("name", "Аптека")
+        address = properties.get("description", "")
+        hours = properties.get("CompanyMetaData", {}).get("Hours", {}).get("text", "Время работы неизвестно")
+        return (org_lon, org_lat), name, address, hours
+    except:
+        return None
 
-def haversine_distance(lon1, lat1, lon2, lat2):
-    lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
-    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * asin(sqrt(a))
-    r = 6371000
-    return c * r
-
-def show_map(start_coords, pharmacy_coords):
-    apikey = "dda3ddba-c9ea-4ead-9010-f43fbc15c6e3"
+def calculate_distance(point1, point2):
+    lon1, lat1 = point1
+    lon2, lat2 = point2
     
-    map_params = get_map_params_for_two_points(start_coords, pharmacy_coords)
-    map_params["apikey"] = apikey
+    degree_to_meters = 111000
+    dx = (lon2 - lon1) * degree_to_meters * math.cos(math.radians((lat1 + lat2) / 2))
+    dy = (lat2 - lat1) * degree_to_meters
     
-    points = [
-        f"{start_coords[0]},{start_coords[1]},pm2rdm",
-        f"{pharmacy_coords[0]},{pharmacy_coords[1]},pm2gnm"
-    ]
-    map_params["pt"] = "~".join(points)
-    
-    map_api_server = "https://static-maps.yandex.ru/v1"
-    response = requests.get(map_api_server, params=map_params)
-    
-    im = BytesIO(response.content)
-    opened_image = Image.open(im)
-    opened_image.show()
+    distance = math.sqrt(dx * dx + dy * dy)
+    return round(distance, 1)
 
 def main():
     if len(sys.argv) < 2:
-        print("Использование: python main.py 'адрес'")
+        print("Использование: python main.py <адрес>")
         sys.exit(1)
     
     address = " ".join(sys.argv[1:])
     
-    print("Поиск адреса...")
-    start_lon, start_lat, start_address = geocode(address)
-    print(f"Найденный адрес: {start_address}")
-    print(f"Координаты: {start_lon}, {start_lat}")
+    print(f"Поиск адреса: {address}")
+    address_result = geocode(address)
     
+    if not address_result:
+        print("Не удалось найти указанный адрес")
+        sys.exit(1)
+    
+    address_coords, address_name = address_result
+    address_lon, address_lat = address_coords
+    
+    print(f"Найден адрес: {address_name}")
+    print(f"Координаты: {address_lon}, {address_lat}")
     print("\nПоиск ближайшей аптеки...")
-    pharmacy = search_pharmacy(start_lon, start_lat)
     
-    if not pharmacy:
-        print("Аптека не найдена")
-        return
+    pharmacy_result = search_pharmacy(address_lon, address_lat)
     
-    distance = haversine_distance(start_lon, start_lat, 
-                                  pharmacy["coords"][0], pharmacy["coords"][1])
+    if not pharmacy_result:
+        print("Не удалось найти аптеки поблизости")
+        sys.exit(1)
+    
+    pharmacy_coords, pharmacy_name, pharmacy_address, pharmacy_hours = pharmacy_result
+    pharmacy_lon, pharmacy_lat = pharmacy_coords
+    
+    distance = calculate_distance(address_coords, pharmacy_coords)
     
     print("\n" + "="*50)
-    print("СНИППЕТ:")
+    print("НАЙДЕННАЯ АПТЕКА:")
     print("="*50)
-    print(f"Исходный адрес: {start_address}")
-    print(f"Аптека: {pharmacy['name']}")
-    print(f"Адрес аптеки: {pharmacy['address']}")
-    print(f"Время работы: {pharmacy['hours']}")
-    print(f"Расстояние: {distance:.0f} метров")
+    print(f"Название: {pharmacy_name}")
+    print(f"Адрес: {pharmacy_address}")
+    print(f"Режим работы: {pharmacy_hours}")
+    print(f"Расстояние от '{address_name}': {distance} метров")
     print("="*50)
     
-    show_map((start_lon, start_lat), pharmacy["coords"])
+    center_lon_str, center_lat_str = scale_calculator.calculate_center_for_two_points(
+        address_coords, pharmacy_coords
+    )
+    
+    spn_lon_str, spn_lat_str = scale_calculator.calculate_spn_for_two_points(
+        address_coords, pharmacy_coords
+    )
+    
+    map_params = {
+        "ll": f"{center_lon_str},{center_lat_str}",
+        "spn": f"{spn_lon_str},{spn_lat_str}",
+        "pt": f"{address_lon},{address_lat},pm2rdm~{pharmacy_lon},{pharmacy_lat},pm2gnm",
+        "apikey": config.STATIC_MAPS_API_KEY,
+        "size": "650,450"
+    }
+    
+    map_api_server = "https://static-maps.yandex.ru/v1"
+    response = requests.get(map_api_server, params=map_params)
+    
+    if response.status_code == 200:
+        im = BytesIO(response.content)
+        opened_image = Image.open(im)
+        opened_image.show()
+    else:
+        print(f"Ошибка при получении карты: {response.status_code}")
 
 if __name__ == "__main__":
     main()
